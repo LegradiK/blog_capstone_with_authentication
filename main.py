@@ -60,14 +60,15 @@ with app.app_context():
 def register():
     registration_form = RegistrationForm()
     if registration_form.validate_on_submit():
+        password = registration_form.password.data
         new_user = User(
         email = registration_form.email.data,
-        password = registration_form.password.data,
+        password = generate_password_hash(password, method='pbkdf2:sha256', salt_length=8),
         name = registration_form.name.data
         )
         db.session.add(new_user)
         db.session.commit()
-    return render_template("register.html")
+    return render_template("register.html", form=registration_form)
 
 
 # TODO: Retrieve a user from the database based on their email.
