@@ -55,21 +55,38 @@ with app.app_context():
 login_manager = LoginManager()
 login_manager.init_app(app)
 
+def admin_only(func):
+    @wraps(func)
+    def decorated_function(*args,**kwargs):
+        if current_user.is_authenticated and current_user.id == 1:
+            return func(*args, **kwargs)
+        else:
+            abort(403)
+    return decorated_function
+
 
 # TODO: Use Werkzeug to hash the user's password when creating a new user.
 @app.route('/register', methods=['GET','POST'])
 def register():
     registration_form = RegistrationForm()
+    login_email = registration_form.email.data
+    if db.session.query(User).filter(User.email == login_email).first():
+        flash("This email is already registered. Please login instead.", category="error")
+        return redirect(url_for('login'))
+
     if registration_form.validate_on_submit():
         password = registration_form.password.data
         new_user = User(
-        email = registration_form.email.data,
+        email = login_email,
         password = generate_password_hash(password, method='pbkdf2:sha256', salt_length=8),
         name = registration_form.name.data
         )
         db.session.add(new_user)
         db.session.commit()
-        return redirect(url_for('get_all_posts'))
+        flash("You've registered successfully!", "info")
+        login_user(new_user, remember=True)
+        user_data = db.session.execute(db.select(User).where(User.email == new_user.email)).scalar_one_or_none()
+        return redirect(url_for('get_all_posts', logged_in=True, id=user_data.id))
     return render_template("register.html", form=registration_form)
 
 # get user details
@@ -86,21 +103,24 @@ def login():
         password = request.form.get('password')
         user_data = db.session.execute(db.select(User).where(User.email == email)).scalar_one_or_none()
         if user_data == None:
-            flash("This email doesn't exist in the database", "error")
-            return redirect(url_for('login'))
+            flash("This email doesn't exist in the database. Please register first.", category="error")
+            return redirect(url_for('register'))
 
-        if check_password_hash(user_data.password == password):
+        if check_password_hash(user_data.password,password):
             login_user(user_data, remember=True)
-            flash("Login successful :)", "info")
-            return redirect(url_for('get_all_posts'))
+            flash("Login successful :)", category="info")
+            user_id = user_data.id
+            return redirect(url_for('get_all_posts', logged_in=True, id=user_id))
         else:
-            flash("Wrong password", "error")
+            flash("Wrong password. Please try again.", category="error")
             return redirect(url_for('login'))
     return render_template("login.html", form=login_form)
 
 
 @app.route('/logout')
 def logout():
+    logout_user()
+    flash("Logout successfully", "info")
     return redirect(url_for('get_all_posts'))
 
 
@@ -108,6 +128,10 @@ def logout():
 def get_all_posts():
     result = db.session.execute(db.select(BlogPost))
     posts = result.scalars().all()
+    if current_user.is_authenticated:
+        return render_template("index.html", all_posts=posts,
+                               logged_in=current_user.is_authenticated,  # Ensures `logged_in` is always passed
+                               id=current_user.id if current_user.is_authenticated else None)  # Pass `id` only if logged in
     return render_template("index.html", all_posts=posts)
 
 
@@ -115,11 +139,16 @@ def get_all_posts():
 @app.route("/post/<int:post_id>")
 def show_post(post_id):
     requested_post = db.get_or_404(BlogPost, post_id)
+    if current_user.is_authenticated:
+        return render_template("post.html", post=requested_post,
+                               logged_in=current_user.is_authenticated,  # Ensures `logged_in` is always passed
+                               id=current_user.id if current_user.is_authenticated else None)  # Pass `id` only if logged in
     return render_template("post.html", post=requested_post)
 
 
 # TODO: Use a decorator so only an admin user can create a new post
 @app.route("/new-post", methods=["GET", "POST"])
+@admin_only
 def add_new_post():
     form = CreatePostForm()
     if form.validate_on_submit():
@@ -139,6 +168,7 @@ def add_new_post():
 
 # TODO: Use a decorator so only an admin user can edit a post
 @app.route("/edit-post/<int:post_id>", methods=["GET", "POST"])
+@admin_only
 def edit_post(post_id):
     post = db.get_or_404(BlogPost, post_id)
     edit_form = CreatePostForm(
@@ -155,12 +185,13 @@ def edit_post(post_id):
         post.author = current_user
         post.body = edit_form.body.data
         db.session.commit()
-        return redirect(url_for("show_post", post_id=post.id))
-    return render_template("make-post.html", form=edit_form, is_edit=True)
+        return redirect(url_for("show_post", post_id=post.id,))
+    return render_template("make-post.html", form=edit_form, is_edit=True, logged_in=True)
 
 
 # TODO: Use a decorator so only an admin user can delete a post
 @app.route("/delete/<int:post_id>")
+@admin_only
 def delete_post(post_id):
     post_to_delete = db.get_or_404(BlogPost, post_id)
     db.session.delete(post_to_delete)

@@ -10850,6 +10850,15 @@ header.masthead .post-heading .meta a {
 
 /* Flash Message Styling */
 .flash {
-  color: #ee6f57;
+  color: darkslategrey;
+  text-align: center;
+}
+.flash.error {
+  color: red;
+  text-align: center;
+}
+.flash.info {
+  color: white;
+  font-style: italic;
   text-align: center;
 }
