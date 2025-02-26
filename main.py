@@ -11,7 +11,7 @@ from sqlalchemy import Integer, String, Text, ForeignKey
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 # Import your forms from the forms.py
-from forms import CreatePostForm, RegistrationForm, LoginForm
+from forms import CreatePostForm, RegistrationForm, LoginForm, CommentForm
 
 
 app = Flask(__name__)
@@ -36,6 +36,7 @@ class BlogPost(db.Model):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     parent_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     parent: Mapped["User"] = relationship("User", back_populates="blog_posts", foreign_keys=[parent_id])
+    blog_comments: Mapped[List["Comment"]] = relationship("Comment", back_populates="parent_posts", foreign_keys=[Comment.parent_posts_id])
     title: Mapped[str] = mapped_column(String(250), unique=True, nullable=False)
     subtitle: Mapped[str] = mapped_column(String(250), nullable=False)
     date: Mapped[str] = mapped_column(String(250), nullable=False)
@@ -47,9 +48,19 @@ class User(db.Model, UserMixin):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     blog_posts: Mapped[List["BlogPost"]] = relationship("BlogPost", back_populates="parent", foreign_keys=[BlogPost.parent_id])
+    user_comments: Mapped[List["Comment"]] = relationship("Comment", back_populates="parent_user", foreign_keys=[Comment.parent_user_id])
     email: Mapped[str] = mapped_column(String(250), unique=True, nullable=False)
     password: Mapped[str] = mapped_column(String(250), nullable=False)
     name: Mapped[str] = mapped_column(String(250), nullable=False)
+
+class Comment(db.Model):
+    __tablename__ = "comments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    parent_user: Mapped["User"] = relationship("User", back_populates="user_comments", foreign_keys=[parent_user_id])
+    parent_posts_id: Mapped[int] = mapped_column(ForeignKey("blogs.id"))
+    parent_posts: Mapped["BlogPost"] = relationship("BlogPost", back_populates="user_comments", foreign_keys=[parent_posts_id])
+    comment: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 with app.app_context():
@@ -139,14 +150,23 @@ def get_all_posts():
 
 
 # TODO: Allow logged-in users to comment on posts
-@app.route("/post/<int:post_id>")
+@app.route("/post/<int:post_id>", methods=['GET','POST'])
 def show_post(post_id):
     requested_post = db.get_or_404(BlogPost, post_id)
+    comment_form = CommentForm()
+    if comment_form.validate_on_submit:
+        new_comment = Comment(
+            comment = comment_form.comment.data,
+            parent_user = current_user.id,
+            parent_post = requested_post.id
+        )
+        db.session.add(new_comment)
+        db.session.commit()
     if current_user.is_authenticated:
         return render_template("post.html", post=requested_post,
                                logged_in=current_user.is_authenticated,  # Ensures `logged_in` is always passed
                                id=current_user.id if current_user.is_authenticated else None)  # Pass `id` only if logged in
-    return render_template("post.html", post=requested_post)
+    return render_template("post.html", post=requested_post, form=comment_form)
 
 
 # TODO: Use a decorator so only an admin user can create a new post
@@ -166,7 +186,7 @@ def add_new_post():
         db.session.add(new_post)
         db.session.commit()
         return redirect(url_for("get_all_posts"))
-    return render_template("make-post.html", form=form)
+    return render_template("make-post.html", form=form, logged_in=True)
 
 
 # TODO: Use a decorator so only an admin user can edit a post
@@ -188,7 +208,7 @@ def edit_post(post_id):
         post.parent = current_user
         post.body = edit_form.body.data
         db.session.commit()
-        return redirect(url_for("show_post", post_id=post.id,))
+        return redirect(url_for("show_post", post_id=post.id))
     return render_template("make-post.html", form=edit_form, is_edit=True, logged_in=True)
 
 
